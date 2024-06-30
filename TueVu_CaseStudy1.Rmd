@@ -1,0 +1,266 @@
+---
+title: "CaseStudy1"
+author: "Tue Vu"
+date: "2024-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Step 1: Preparation
+Remove current environment, set working directory and load necessary libraries
+
+```{r}
+rm(list=ls())
+setwd("/Users/a46791130/Documents/SMU/SMU_MSDS/MSDS_6306_Doing-Data-Science-Master/Unit 8 and 9 Case Study 1")
+library(tidyverse)
+library(Amelia)
+library(caret)
+library(ggplot2)
+library(Amelia)
+library(psych)
+library(GGally)
+library(e1071)
+library(class)
+library(glmnet)
+library(psych)
+library(rpart)
+library(plotmo)
+library(rattle)
+```
+First load the input data file and check the missing value
+
+```{r}
+data <- read.csv("CaseStudy1-data.csv")
+sum(is.na(data))
+
+# An alternative way to visualize the missing data
+missmap(data)
+```
+Quick way to see structure of data:
+
+
+```{r}
+dim(data)
+str(data)
+```
+There are 870 employee was in the survey and 36 survey questions were asked represented by predictors
+
+Another way to describe the data
+
+```{r}
+describe(data)
+```
+Since there is no missing data, we are safe to proceed with Exploratory Data Analyses
+
+First remove some unwanted variables
+- ID: this is an order number with increasing value and has no meaning in modeling
+- EmployeeCount: only contains 1 value
+- Over18: all working adult are over 18
+- StandardHours: 80 are the same for everyone
+
+```{r}
+print(unique(data$EmployeeCount))
+print(unique(data$Over18))
+print(unique(data$StandardHours))
+
+col2remove <- c(1,10,23,28)
+data1 <- data[,-col2remove]
+```
+
+## Step 2: Exploratory Data Analyses
+
+Let do some EDA by answering several questions:
+
+(1) How many percentage of Male/Female turn over rate?
+
+```{r}
+GY <- data %>% filter(Attrition=="Yes") %>% group_by(Gender) %>% summarise(nG=length(Gender))
+GT <- data %>% group_by(Gender) %>% summarise(nT=length(Gender))
+dG <- cbind(GY,GT)
+dG$Percent <- dG$nG/dG$nT*100
+dG
+```
+
+It seems that the turn over rate does not depend on Gender because among all male and female, the turn over rate for them are about 15%
+
+(2) Find out what JobRole has highest turn over rate?
+```{r}
+JRY <- data %>% filter(Attrition=="Yes") %>% group_by(JobRole) %>% summarise(nY=length(JobRole))
+JRT <- data %>% group_by(JobRole) %>% summarise(nT=length(JobRole))
+
+dJR <- cbind(JRY,JRT)
+dJR$Percent <- (dJR$nY/dJR$nT)*100
+dJR
+```
+We can see among all Job, people who works as Sales Representative has high chances of having Attrition (45%), second by Human Resources (22%), on the other hand Research Director accounted for only 2% (having lowest turn over rate) and quite similar to Manufacturing Director (2.2%).
+
+(3) What are average job satisfaction by job role?
+
+```{r}
+data %>% group_by(JobRole) %>% summarise(avg = mean(JobSatisfaction)) %>% arrange(desc(avg))
+```
+
+From the analyses, All JobRole having average JobSatisfaction rate ranges from 2.5 to 2.8, and the highest average JobSatifaction goes to Healthcare Representative and lowest is for Research Director
+
+We apply quick anova approach to see if there is any significant difference between the Job Satisfaction for each Job Role or not?
+State the Null Hypothesis: Ho: All Job Role have equal Job Satisfaction level. The Alternative Ha is: there exists at least 1 pair of Job Role do not have same Satisfaction level.
+
+```{r}
+fit <- aov(JobSatisfaction~JobRole,data=data)
+summary(fit)
+```
+We can see that F-value = 0.788 with p-value = 0.6 > the alpha (0.05)
+Thus we have decision that is failed to reject the Null Hypothesis. We come to conclusion that there is evidence to suggest all Job Role have similar Satisfaction rate.
+
+(4) What MaritalStatus overwhelme the decision to turn over?
+
+```{r}
+MSY <- data %>% filter(Attrition=="Yes") %>% group_by(MaritalStatus) %>% summarise(nY=length(MaritalStatus))
+MST <- data %>% group_by(MaritalStatus) %>% summarise(nT=length(MaritalStatus))
+
+dMS <- cbind(MSY,MST)
+dMS$Percent <- (dMS$nY/dMS$nT)*100
+dMS
+```
+
+From the analyses, it seems that the Single has highest turn over rate (26%) and interestingly, the one who Divorced, has very low turn over rate (6%).
+
+### (5) Monthly Salary according to JobRole, is there any different in Salary?
+
+```{r}
+ggplot(data,aes(x=JobRole,y=MonthlyIncome))+
+        geom_boxplot(aes(color=JobRole))+
+        theme(legend.position="none",axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 1))
+
+```
+
+To check the Hypothesis of equal Monthly Income, we use Anova test with Null Hypothesis that there exists equal mean MonthlyIncome across all Job Role
+
+```{r}
+fit_MI <- aov(MonthlyIncome~JobRole,data=data)
+summary(fit_MI)
+```
+The p-value is very small compare to alpha, suggesting to reject the Null Hypothesis and conclude that there is overwhelem evidences to show there exists at least 1 pair of Job Role with significant different mean value
+
+### (6)
+
+Since MonthlyIncome, DailyRate, HourlyRate and MonthlyRate are in $ values, we would like to see if there are any collinearity associated or not
+
+```{r}
+c_rate <- c(5,14,20,21,13)
+ggpairs(data[,c_rate],aes(color=Gender))
+```
+
+
+We can see there is literally no correlation between all income level, therefore, we do not remove any of these income level out of the calculation
+
+Again we check for collinearity between some variables related to Year working (YearsAtCompany, YearsInCurrentRole,YearsSinceLastPromotion and YearsWithCurrManager)
+
+```{r}
+ggpairs(data[,c(13,33:36)],aes(color=Gender))
+
+```
+
+
+The correlation value and scatteplot suggest correlation between YearsAtCompany with other 3 variables
+
+
+## Step 3: Training the model and calculate Confusion Matrix
+
+Split data into training and testing, we reserved 70% of data for training and 30% for testing
+
+```{r}
+set.seed(1234)
+ind <- createDataPartition(y=data1$Attrition,p=0.7,list=FALSE)
+training     <- data1[ind,]
+testing      <- data1[-ind,]
+```
+
+In many ML method, Random Forest is one of the most versatile algorithm that can be applied for any type of input variable as well as output data no matter in continuous or categorical format. Random Forest is also an ML ensemble Bagging technique that helps to avoid OverFitting. 
+Next we apply Random Forest for all predictors and quickly compute the confusion matrix for testing set:
+
+```{r}
+model_rf <- train(Attrition~.,data=training,method="rf")
+print(model_rf)
+predict_rf <- predict(model_rf,newdata=testing)
+confusionMatrix(factor(testing$Attrition),predict_rf,positive="Yes")
+```
+
+
+We can see at the first run, using all predictors and apply Random Forest to the model to detect the Attrition, we have the accuracy of 86%, The Sensitivity/Specificity are 0.75/0.87 respectively.
+
+Next, let's find the important feature variables with ranking:
+
+```{r}
+X_rf <- varImp(model_rf)
+plot(X_rf)
+```
+
+We can see the Importance factor range with top 3 most important variables are MonthlyIncome, OverTime and StockOptionLevel. Variable Age standing at 4th place but has very close important value to StockOptionLevel
+
+Next reduce to the top 3: MonthlyIncome,OverTime and StockOptionLevel to train the model with NaiveBayes
+
+```{r}
+data3 <- data %>% select(c("Attrition","MonthlyIncome","OverTime","StockOptionLevel"))
+set.seed(1234)
+ind3 <- createDataPartition(data3$Attrition,p=0.7,list=FALSE)
+training3 <- data3[ind,]
+testing3  <- data3[-ind,]
+
+model_nb3 <- train(Attrition~.,data=training3,method="nb")
+predict3 <- predict(model_nb3,newdata=testing3)
+confusionMatrix(factor(testing3$Attrition),predict3,positive="Yes")
+```
+
+
+With using only 3 variables, we have similar Accuracy and Specificity score in comparison to Random Forest, but significantly lower Sensitivity score. However, both Sensitivity and Specificity score are larger than 0.6, which satifies the requirement
+
+Next, in order to have better explanation, we plot the Decision Tree:
+```{r}
+model_dt <- rpart(Attrition~.,data=training3,method="class")
+fancyRpartPlot(model_dt)
+```
+
+From Decision Tree plotting, we have several findings:
+
+##### - The first split node is based on OverTime, if the work do not require OT, 69% will stay (No Attrition)
+##### - However, if OT occured, the next spliting node is MonthlyIncome more than $2494 or not, if employee has salary lower than $2494 and requesting them to do overtime, they are likely to leave the company.
+##### - If MonthlyIncome is more than $2494, employee now will pay attention to the StockOptionLevel, if this level is more than 0.5, they are likely stay back.
+##### - Some of the subsequent splitting nodes are purely based on level of MonthlySalary.
+
+
+Next in order to avoid overfitting, I will perform K-fold cross validation with NB (K=10)
+
+```{r}
+fitControl <- trainControl(method="cv",number=10)
+model_Kfold_nb <- train(Attrition~.,data=training3,
+                        trControl=fitControl,
+                        preProcess=c("center","scale"),
+                        method="nb")
+
+print(model_Kfold_nb)
+predict_Kfold <- predict(model_Kfold_nb,newdata=testing3)
+confusionMatrix(factor(testing3$Attrition),predict_Kfold,positive="Yes")
+```
+
+Using K-fold cross validation, we are able to train the model to avoid the overfitting. Next we will apply the trained K-fold cross validation Naive Bayes model to predict the validation data:
+
+First, load the validation data and select only 3 most sensitive variables, then apply the model to predict output
+```{r}
+val_data <- read.csv("CaseStudy2CompSet No Attrition.csv")
+val_data3 <- val_data  %>% select(c("MonthlyIncome","OverTime","StockOptionLevel"))
+predict_val3 <- as.character(predict(model_Kfold_nb,val_data3))
+
+```
+
+Save output to csv:
+
+```{r}
+outputv <- cbind(val_data$ID,predict_val3)
+colnames(outputv) <- c("ID","Attrition")
+write.csv(outputv,"TueVu_Case2_output.csv",row.names = FALSE)
+```
+
