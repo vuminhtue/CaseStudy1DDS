@@ -9,9 +9,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 ## Link to Youtube presentation
-
 https://www.youtube.com/watch?v=I3wtLNDcjkU
 
+## Link to Github repo:
+https://github.com/vuminhtue/CaseStudy1DDS
 
 ## Step 1: Preparation
 Remove current environment, set working directory and load necessary libraries
