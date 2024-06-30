@@ -265,6 +265,6 @@ Save output to csv:
 ```{r}
 outputv <- cbind(val_data$ID,predict_val3)
 colnames(outputv) <- c("ID","Attrition")
-write.csv(outputv,"TueVu_Case2_output.csv",row.names = FALSE)
+write.csv(outputv,"TueVu_CaseStudy1_prediction.csv",row.names = FALSE)
 ```
 
